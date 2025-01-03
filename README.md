@@ -31,7 +31,7 @@ You can install Socrates using your favorite plugin manager. Two examples are [l
 
 ```lua
 {
-  "your-username/socrates",  -- Replace with your actual GitHub or repo
+  "jacogrande/socrates",
   dependencies = { "nvim-lua/plenary.nvim" },
   config = function()
     require("socrates").setup({
