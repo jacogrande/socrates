@@ -24,7 +24,25 @@ function M.send_to_openai(text, config, callback)
   local payload = {
     model = "gpt-4o-mini",
     messages = {
-      { role = "user", content = text },
+      {
+        role = "system",
+        content = [[
+        You are a writing feedback assistant. 
+        Given a Markdown text, you analyze it and respond ONLY with a JSON array of feedback objects in the format:
+        [
+          {
+            "lineRange": [startLine, endLine],
+            "title": "Short Title",
+            "description": "Detailed Explanation"
+          },
+          ...
+        ]
+      ]]
+      },
+      {
+        role = "user",
+        content = text,  -- the user’s Markdown content
+      }
     },
     temperature = config.temperature or 0.7,
   }
