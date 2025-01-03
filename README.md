@@ -1,173 +1,138 @@
 # Socrates
 
-A Neovim plugin that serves as a second-person “writing companion” for Markdown files. Socrates integrates with OpenAI’s GPT-4 (or GPT-4o) API to provide continuous feedback on your prose. As you type, Socrates sends your buffer content to OpenAI and inserts virtual text annotations (inline) about suggested improvements, warnings, or any other GPT-generated commentary.
+Socrates is a Neovim plugin that uses the OpenAI API to provide Socratic dialog and line-by-line commentary as you write Markdown documents. The plugin debounces requests to the API (so they only happen every couple of seconds), tracks changes in your buffer to only request commentary on newly updated lines, and attaches GPT’s comments as [Neovim diagnostics][nvim-diagnostic-docs].
 
-> **Note**: This is a reference implementation. You’ll likely want to adapt it for your specific workflow (e.g., partial text updates, custom feedback formats, chunking for large docs, etc.).
+> **DISCLAIMER**: This plugin interacts with a paid third-party service (OpenAI). Use responsibly.
 
 ---
 
 ## Features
 
-1. **Real-time Feedback**  
-   After a short debounce, your Markdown buffer is sent to GPT for feedback, which then appears inline.
+- **Line-by-line Socratic comments** in the form of Neovim diagnostics.
+- **Debouncing** to avoid spamming the API on every keystroke.
+- **Diff-based** commentary: only changed lines get annotated.
+- Works seamlessly with your existing `.md` files and note-taking workflow.
 
-2. **Inline Annotations**  
-   Comments are displayed as virtual text on the affected lines.
+---
 
-3. **Automatic Removal of Stale Feedback**  
-   If you change a line overlapping an existing comment’s range, that comment is removed.
+## Requirements
 
-4. **OpenAI Integration**  
-   Uses the OpenAI Chat Completions endpoint (`https://api.openai.com/v1/chat/completions`). The user must supply an API key in their config.
-
-5. **Optional Side Pane**  
-   You can open a side pane (`:MarkdownFeedbackOpen`) for notes, logs, or expansions.
+1. **Neovim** version 0.8+ (for Lua support and built-in diagnostics).
+2. **[plenary.nvim][plenary.nvim]** for HTTP requests.
+3. An **OpenAI API key** (e.g., `sk-...`). You can store this in an environment variable `OPENAI_API_KEY`, or pass it directly in your config.
 
 ---
 
 ## Installation
 
-Below is an example using [**lazy.nvim**](https://github.com/folke/lazy.nvim).
+You can install Socrates using your favorite plugin manager. Two examples are [lazy.nvim][lazy.nvim] and [packer.nvim][packer.nvim].
 
-1. **Add the plugin to your Lazy config** (e.g., `~/.config/nvim/lua/plugins/socrates.lua`):
-
-   ```lua
-   return {
-     {
-       -- Replace with your own repo or local path
-       "yourusername/socrates",
-       ft = { "markdown" },
-       config = function()
-         require("socrates").setup({
-           openai_api_key = "YOUR_OPENAI_API_KEY",
-           temperature = 0.7,
-           debounce_ms = 1500,
-         })
-       end,
-     },
-   }
-   ```
-
-2. **Install**: Run `:Lazy sync` and restart Neovim.
-
-3. **Open a Markdown file** (`.md`). Once open, Socrates will attach automatically.
-
----
-
-## Configuration
-
-You can pass a configuration table to `setup()`. The defaults (with their typical usage) are:
+### Using lazy.nvim
 
 ```lua
-require("socrates").setup({
-  openai_api_key = "YOUR_OPENAI_API_KEY", -- Required
-  temperature = 0.7,                      -- Customizable, affects GPT “creativity”
-  debounce_ms = 1000,                     -- Delay between typed changes and GPT requests (in ms)
+{
+  "your-username/socrates",  -- Replace with your actual GitHub or repo
+  dependencies = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require("socrates").setup({
+      -- Your custom config goes here
+      -- openai_api_key = "sk-xxxxxx", -- or rely on OPENAI_API_KEY env var
+      -- model = "gpt-3.5-turbo",
+      -- events = { "TextChangedI", "TextChanged" },
+      -- debounce_ms = 2000,
+    })
+  end
+}
+```
+
+### Using packer.nvim
+
+```lua
+use({
+  "your-username/socrates",  -- Replace with your actual GitHub or repo
+  requires = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require("socrates").setup({
+      -- openai_api_key = "sk-xxxxxx",
+      -- model = "gpt-3.5-turbo",
+      -- events = { "TextChangedI", "TextChanged" },
+      -- debounce_ms = 2000,
+    })
+  end,
 })
 ```
 
-- **`openai_api_key`** (Required): Your OpenAI secret key (e.g., `sk-...`).
-- **`temperature`**: GPT “creativity” level (0.0 = deterministic, 1.0 = more creative).
-- **`debounce_ms`**: Wait time in milliseconds after you stop typing before sending the buffer content to GPT.
+> **Note**: If you prefer not to check your API key into a config file, be sure to set the environment variable `OPENAI_API_KEY` instead.
 
-> **Security Note**: Keep your API key safe. Don’t commit it to a public repo.
+---
+
+## Basic Configuration
+
+Below are the main config options you can override:
+
+| Field            | Type      | Default                             | Description                                                                                             |
+| ---------------- | --------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `openai_api_key` | `string`  | `os.getenv("OPENAI_API_KEY")`       | Your OpenAI API key. If left blank, the plugin will look for the `OPENAI_API_KEY` environment variable. |
+| `model`          | `string`  | `"gpt-3.5-turbo"`                   | Which OpenAI model to use for the chat completions.                                                     |
+| `events`         | `table`   | `{ "TextChangedI", "TextChanged" }` | The auto commands that will trigger Socrates requests.                                                  |
+| `debounce_ms`    | `integer` | `2000`                              | How many milliseconds to wait before sending a new request to GPT, to avoid spamming the API.           |
+
+Example config:
+
+```lua
+require("socrates").setup({
+  openai_api_key = "sk-your-api-key-here",
+  model = "gpt-3.5-turbo",
+  events = { "TextChangedI", "TextChanged" },
+  debounce_ms = 2000,
+})
+```
 
 ---
 
 ## Usage
 
-1. **Open a Markdown file**: Socrates automatically attaches and watches for changes.
-2. **Type**: After you pause for `debounce_ms`, Socrates sends your entire buffer to the OpenAI endpoint.
-3. **Observe**: The plugin inserts GPT’s suggestions or warnings as inline annotations on relevant lines.
-4. **Editing**: If you modify lines that overlap an existing comment, that comment is removed (to prevent stale feedback).
-5. **Side Pane**: Optionally open a side pane with `:MarkdownFeedbackOpen`. The inline feedback still appears in the main buffer.
+1. **Open a Markdown file** (`*.md`).
+2. Start typing or editing. After you’ve paused for about 2 seconds (default debounce), Socrates will:
+   - Collect your buffer text.
+   - Compute the changed lines since the last request.
+   - Ask GPT to provide Socratic commentary **only** for those changed lines.
+   - Parse GPT’s JSON response and create a Neovim diagnostic for each line.
+3. **View diagnostics** in one of the following ways:
+   - Hover over the line (`:lua vim.diagnostic.open_float()` or set up an autocmd for `CursorHold`).
+   - Use the built-in diagnostic commands like `:lua vim.diagnostic.goto_next()` or `:Telescope diagnostics`.
+   - Or open the diagnostics panel (`:lua vim.diagnostic.setqflist()`).
 
 ---
 
-## The Three Lua Files
+## Tips and Notes
 
-This plugin is split into three main files inside the `lua/socrates/` directory:
-
-1. **`api.lua`**
-
-   - Handles sending data to the OpenAI API via `curl` (`jobstart`).
-   - Expects a JSON response containing a `choices` array; we extract `choices[1].message.content`.
-   - Passes the raw GPT content back to the plugin for parsing.
-
-2. **`feedback.lua`**
-
-   - Renders GPT feedback inline using Neovim `extmarks`.
-   - Removes stale feedback when lines overlap changes.
-
-3. **`init.lua`**
-   - The plugin’s “entry point.”
-   - Exposes `setup()` for config, sets up autocmds for `FileType markdown`, debounces LLM requests, and calls `feedback` methods.
+- **Large Documents**: If your `.md` files are extremely large, you might exceed token limits or face slow responses. Consider chunking or summarizing the text in a future enhancement.
+- **Multiple Buffers**: This simple version tracks only a single `last_sent_text` global. If you switch between multiple `.md` buffers frequently, you can easily adapt the code to cache `last_sent_text` per buffer.
+- **Fallback Handling**: Sometimes GPT might not strictly follow the JSON schema. Consider adding fallback logic or better error handling in production.
+- **API Costs**: Remember that each request consumes tokens. Keep an eye on usage. Debouncing helps reduce unnecessary calls.
 
 ---
 
-## Common Pitfalls & Fixes
+## Contributing
 
-### 1. `E5560: nvim_buf_get_lines must not be called in a lua loop callback`
-
-Neovim disallows certain buffer API calls (like `nvim_buf_get_lines`) from _within_ the `on_lines` event. **Fix** this by wrapping the call in `vim.schedule()`, so the function runs _after_ the current event:
-
-```lua
--- WRONG:
--- local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)  -- inside on_lines callback
-
--- CORRECT:
-vim.schedule(function()
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  -- ...
-end)
-```
-
-### 2. Large Document Issues
-
-OpenAI has token limits; if your file is large, you may exceed them. Strategies include:
-
-- Only sending changed lines + surrounding context.
-- Summarizing prior content.
-
-### 3. API Costs & Rate Limits
-
-Calls to GPT can be expensive if you type quickly. Adjust `debounce_ms` or implement chunk-based strategies to reduce usage.
+1. Fork the repository and create your feature branch (`git checkout -b feature/foo`).
+2. Make changes and write tests.
+3. Commit your changes (`git commit -am 'Add some feature'`).
+4. Push to the branch (`git push origin feature/foo`).
+5. Create a new Pull Request.
 
 ---
 
-## Feedback Format
+## License
 
-We assume GPT’s output is a **JSON array** of objects:
-
-```json
-[
-  {
-    "lineRange": [20, 24],
-    "title": "Potential fallacy",
-    "description": "You rely on an unsubstantiated claim here..."
-  },
-  ...
-]
-```
-
-- **`lineRange`**: `[startLine, endLine]`, 0- or 1-based depending on your prompt/instructions.
-- **`title`**: Short message, displayed inline.
-- **`description`**: Longer explanation.
-
-Socrates uses this data to place inline warnings on your buffer. If the lines are 1-based in GPT’s output, you may need to subtract 1 before calling `vim.api.nvim_buf_set_extmark`.
+This plugin is released under the [MIT License](LICENSE).
 
 ---
 
-## Commands
+**Happy Socratic note-taking!**
 
-- `:MarkdownFeedbackOpen`  
-  Opens a vertical split “GPT_Feedback” buffer. Useful for notes or plugin logs.
-
----
-
-## License & Contributing
-
-- **License**: MIT.
-- **Contributions**: PRs, issues, and suggestions welcome.
-
-**Happy Writing!**
+[nvim-diagnostic-docs]: https://neovim.io/doc/user/lsp.html#diagnostics
+[plenary.nvim]: https://github.com/nvim-lua/plenary.nvim
+[lazy.nvim]: https://github.com/folke/lazy.nvim
+[packer.nvim]: https://github.com/wbthomason/packer.nvim
