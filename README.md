@@ -1,65 +1,46 @@
 # Socrates
 
-A Neovim plugin that provides feedback on your Markdown writing in real time—like having another person reviewing your text as you type. The plugin continuously sends your buffer content to a Large Language Model (LLM) API, receives feedback in JSON format, and displays comments inline via virtual text. You can optionally open a side pane for note-taking or reviewing logs.
+A Neovim plugin that serves as a second-person “writing companion” for Markdown files. Socrates integrates with OpenAI’s GPT-4 (or GPT-4o) API to provide continuous feedback on your prose. As you type, Socrates sends your buffer content to OpenAI and inserts virtual text annotations (inline) about suggested improvements, warnings, or any other GPT-generated commentary.
 
-> **Note:** This is a reference implementation or scaffold. You’ll likely want to adapt it to your own needs (e.g., use a robust HTTP library, handle large documents, or integrate with specific LLM endpoints).
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-  - [Using lazy.nvim](#using-lazynvim)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [Commands](#commands)
-- [Feedback JSON Format](#feedback-json-format)
-- [Implementation Details](#implementation-details)
-- [Roadmap / Ideas](#roadmap--ideas)
+> **Note**: This is a reference implementation. You’ll likely want to adapt it for your specific workflow (e.g., partial text updates, custom feedback formats, chunking for large docs, etc.).
 
 ---
 
 ## Features
 
-1. **Automatic Markdown Buffer Detection**  
-   The plugin attaches itself to Markdown files, so it only runs when you open a `.md` file.
+1. **Real-time Feedback**  
+   After a short debounce, your Markdown buffer is sent to GPT for feedback, which then appears inline.
 
-2. **LLM Integration**  
-   Continuously sends your current buffer to a configured LLM endpoint (e.g., GPT-like models) after a short debounce.
+2. **Inline Annotations**  
+   Comments are displayed as virtual text on the affected lines.
 
-3. **Inline Comments**  
-   Feedback is displayed inline as virtual text (via Neovim `extmarks`), making suggestions visible in context.
+3. **Automatic Removal of Stale Feedback**  
+   If you change a line overlapping an existing comment’s range, that comment is removed.
 
-4. **Automatic Removal of Stale Feedback**  
-   If the user edits lines that overlap with existing feedback, that feedback is removed to avoid confusion.
+4. **OpenAI Integration**  
+   Uses the OpenAI Chat Completions endpoint (`https://api.openai.com/v1/chat/completions`). The user must supply an API key in their config.
 
-5. **Side Pane**  
-   An optional side pane can be opened with a command. Use it for logging, note-taking, or potential expansions (like a conversation window).
+5. **Optional Side Pane**  
+   You can open a side pane (`:MarkdownFeedbackOpen`) for notes, logs, or expansions.
 
 ---
 
 ## Installation
 
-You can install **socrates** using any Neovim plugin manager. Below is an example with [lazy.nvim](https://github.com/folke/lazy.nvim).
+Below is an example using [**lazy.nvim**](https://github.com/folke/lazy.nvim).
 
-### Using lazy.nvim
-
-1. Add this plugin to your plugin specs. For instance, create or edit `~/.config/nvim/lua/plugins/socrates.lua`:
+1. **Add the plugin to your Lazy config** (e.g., `~/.config/nvim/lua/plugins/socrates.lua`):
 
    ```lua
    return {
      {
        -- Replace with your own repo or local path
-       "jacogrande/socrates",
+       "yourusername/socrates",
        ft = { "markdown" },
        config = function()
          require("socrates").setup({
-           llm_api_url = "https://your-llm-api.example.com",
-           api_headers = {
-             ["Content-Type"] = "application/json",
-             -- ["Authorization"] = "Bearer YOUR_API_KEY",
-           },
+           openai_api_key = "YOUR_OPENAI_API_KEY",
+           temperature = 0.7,
            debounce_ms = 1500,
          })
        end,
@@ -67,105 +48,126 @@ You can install **socrates** using any Neovim plugin manager. Below is an exampl
    }
    ```
 
-2. Run `:Lazy sync` to install.
+2. **Install**: Run `:Lazy sync` and restart Neovim.
 
-3. Open a Markdown file (`.md`)—the plugin will attach and start watching your buffer.
+3. **Open a Markdown file** (`.md`). Once open, Socrates will attach automatically.
 
 ---
 
 ## Configuration
 
-Use the plugin’s `setup` function to configure behavior:
+You can pass a configuration table to `setup()`. The defaults (with their typical usage) are:
 
 ```lua
 require("socrates").setup({
-  llm_api_url = "https://your-llm-api.example.com",
-  api_headers = {
-    ["Content-Type"] = "application/json",
-    -- ["Authorization"] = "Bearer YOUR_API_KEY",
-  },
-  debounce_ms = 1500,
+  openai_api_key = "YOUR_OPENAI_API_KEY", -- Required
+  temperature = 0.7,                      -- Customizable, affects GPT “creativity”
+  debounce_ms = 1000,                     -- Delay between typed changes and GPT requests (in ms)
 })
 ```
 
-- **`llm_api_url`**: The URL of your LLM API endpoint.
-- **`api_headers`**: Table of additional request headers (for tokens, content type, etc.).
-- **`debounce_ms`**: Milliseconds to wait after user stops typing before sending a request (helps prevent API spam).
+- **`openai_api_key`** (Required): Your OpenAI secret key (e.g., `sk-...`).
+- **`temperature`**: GPT “creativity” level (0.0 = deterministic, 1.0 = more creative).
+- **`debounce_ms`**: Wait time in milliseconds after you stop typing before sending the buffer content to GPT.
+
+> **Security Note**: Keep your API key safe. Don’t commit it to a public repo.
 
 ---
 
 ## Usage
 
-1. **Open a Markdown file**.  
-   Once open, the plugin automatically attaches, tracks your edits, and sends your text to the configured LLM endpoint.
-
-2. **See inline feedback**.  
-   Feedback from the LLM is displayed inline as virtual text on the indicated lines.
-
-3. **Remove or update**.  
-   If you edit lines overlapping feedback, that feedback is automatically removed. If you type more, new feedback will be fetched on the next debounce.
-
-4. **Open side pane**.  
-   You can open an additional vertical pane for logs or notes with:
-   ```vim
-   :MarkdownFeedbackOpen
-   ```
-   By default, it just shows a placeholder. You could customize to display more info or even a conversation log.
-
-### Commands
-
-- **`:MarkdownFeedbackOpen`**  
-  Opens a vertical split with a scratch buffer titled “GPT_Feedback.” Use it for your notes, plugin logs, or expansions.
+1. **Open a Markdown file**: Socrates automatically attaches and watches for changes.
+2. **Type**: After you pause for `debounce_ms`, Socrates sends your entire buffer to the OpenAI endpoint.
+3. **Observe**: The plugin inserts GPT’s suggestions or warnings as inline annotations on relevant lines.
+4. **Editing**: If you modify lines that overlap an existing comment, that comment is removed (to prevent stale feedback).
+5. **Side Pane**: Optionally open a side pane with `:MarkdownFeedbackOpen`. The inline feedback still appears in the main buffer.
 
 ---
 
-## Feedback JSON Format
+## The Three Lua Files
 
-The LLM is expected to respond with a JSON array, where each element looks like:
+This plugin is split into three main files inside the `lua/socrates/` directory:
 
-```json
-{
-  "lineRange": [20, 24],
-  "title": "This is a bad predicate",
-  "description": "You're trying to use this argument to support your thesis, but it's a bad argument..."
-}
+1. **`api.lua`**
+
+   - Handles sending data to the OpenAI API via `curl` (`jobstart`).
+   - Expects a JSON response containing a `choices` array; we extract `choices[1].message.content`.
+   - Passes the raw GPT content back to the plugin for parsing.
+
+2. **`feedback.lua`**
+
+   - Renders GPT feedback inline using Neovim `extmarks`.
+   - Removes stale feedback when lines overlap changes.
+
+3. **`init.lua`**
+   - The plugin’s “entry point.”
+   - Exposes `setup()` for config, sets up autocmds for `FileType markdown`, debounces LLM requests, and calls `feedback` methods.
+
+---
+
+## Common Pitfalls & Fixes
+
+### 1. `E5560: nvim_buf_get_lines must not be called in a lua loop callback`
+
+Neovim disallows certain buffer API calls (like `nvim_buf_get_lines`) from _within_ the `on_lines` event. **Fix** this by wrapping the call in `vim.schedule()`, so the function runs _after_ the current event:
+
+```lua
+-- WRONG:
+-- local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)  -- inside on_lines callback
+
+-- CORRECT:
+vim.schedule(function()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  -- ...
+end)
 ```
 
-- **`lineRange`**: A two-element list `[startLine, endLine]` specifying which lines the feedback applies to.
-  - **Important**: In the plugin example, lines are used zero-based internally. You may need to adjust by -1 if your API returns 1-based indices.
-- **`title`**: A short summary or heading for the issue/suggestion.
-- **`description`**: A more in-depth explanation of the feedback.
+### 2. Large Document Issues
+
+OpenAI has token limits; if your file is large, you may exceed them. Strategies include:
+
+- Only sending changed lines + surrounding context.
+- Summarizing prior content.
+
+### 3. API Costs & Rate Limits
+
+Calls to GPT can be expensive if you type quickly. Adjust `debounce_ms` or implement chunk-based strategies to reduce usage.
 
 ---
 
-## Implementation Details
+## Feedback Format
 
-**Core Files**
+We assume GPT’s output is a **JSON array** of objects:
 
-- **`lua/socrates/init.lua`**: Main plugin logic.
-  - **`setup()`**: Configures and sets up autocmds for Markdown detection.
-  - **Autocommands**: Trigger attachment to `.md` buffers, hooking into `nvim_buf_attach` to watch text changes.
-  - **HTTP Requests**: Uses a simple `curl` command via `vim.fn.jobstart` for demonstration. In a real deployment, consider [plenary.curl](https://github.com/nvim-lua/plenary.nvim) or a dedicated HTTP client.
-  - **Rendering Feedback**: Creates virtual text for each feedback item and stores them in a state table.
-- **`plugin/socrates.vim`**: Calls the `setup()` function on Neovim startup (or when the plugin is loaded).
+```json
+[
+  {
+    "lineRange": [20, 24],
+    "title": "Potential fallacy",
+    "description": "You rely on an unsubstantiated claim here..."
+  },
+  ...
+]
+```
 
-**How it Works**
+- **`lineRange`**: `[startLine, endLine]`, 0- or 1-based depending on your prompt/instructions.
+- **`title`**: Short message, displayed inline.
+- **`description`**: Longer explanation.
 
-1. The plugin attaches to any buffer with filetype `markdown`.
-2. Every time you type, the plugin debounces for a set number of milliseconds. Once the timer elapses, it gathers the entire buffer content and sends it to your configured LLM endpoint.
-3. When the LLM responds with feedback objects, the plugin renders them in the buffer using virtual text.
-4. If you change lines that overlap existing feedback, that feedback is removed automatically to avoid stale messages.
-
----
-
-## Roadmap / Ideas
-
-- **Selective feedback**: Instead of sending the entire buffer, only send changed lines or a context around them (reduce API usage).
-- **Floating Windows**: Expand feedback in a popup on hover or keystroke, rather than purely inline text.
-- **Conversations**: Retain conversation context in a hidden buffer or side pane for Q&A with the LLM.
-- **Sign Icons**: Place icons in the sign column or gutter (like diagnostics).
-- **Customization**: Let users configure color highlights, formatting of feedback, or map custom commands for toggling suggestions.
+Socrates uses this data to place inline warnings on your buffer. If the lines are 1-based in GPT’s output, you may need to subtract 1 before calling `vim.api.nvim_buf_set_extmark`.
 
 ---
 
-**Enjoy your socratic writing assistant!** If you run into issues or want to propose improvements, feel free to open an issue or a pull request on this repository. Happy writing!
+## Commands
+
+- `:MarkdownFeedbackOpen`  
+  Opens a vertical split “GPT_Feedback” buffer. Useful for notes or plugin logs.
+
+---
+
+## License & Contributing
+
+- **License**: MIT.
+- **Contributions**: PRs, issues, and suggestions welcome.
+
+**Happy Writing!**
