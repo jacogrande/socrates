@@ -32,30 +32,33 @@ local debounce_timers = {}
 ---Send the entire buffer to OpenAI, parse JSON feedback, and render in the buffer.
 ---@param bufnr number
 local function send_buffer_to_llm(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local text = table.concat(lines, "\n")
+  -- Defer reading the buffer lines until we're in a safe context.
+  vim.schedule(function()
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local text = table.concat(lines, "\n")
 
-  -- Use the API to send the text
-  api.send_to_openai(text, M.config, function(err, raw_content)
-    if err then
+    -- Use the API to send the text
+    api.send_to_openai(text, M.config, function(err, raw_content)
+      if err then
+        vim.schedule(function()
+          vim.notify("[socrates] LLM request error: " .. err, vim.log.levels.ERROR)
+        end)
+        return
+      end
+
+      -- Our plugin expects the content to be valid JSON array of feedback objects
+      local ok, decoded = pcall(vim.json.decode, raw_content)
+      if not ok or type(decoded) ~= "table" then
+        vim.schedule(function()
+          vim.notify("[socrates] Failed to parse LLM response as JSON array.", vim.log.levels.WARN)
+        end)
+        return
+      end
+
+      -- If decoding was successful, pass feedback to feedback.render_feedback
       vim.schedule(function()
-        vim.notify("[socrates] LLM request error: " .. err, vim.log.levels.ERROR)
+        feedback.render_feedback(bufnr, decoded)
       end)
-      return
-    end
-
-    -- Our plugin expects the content to be valid JSON array of feedback objects
-    local ok, decoded = pcall(vim.json.decode, raw_content)
-    if not ok or type(decoded) ~= "table" then
-      vim.schedule(function()
-        vim.notify("[socrates] Failed to parse LLM response as JSON array.", vim.log.levels.WARN)
-      end)
-      return
-    end
-
-    -- If decoding was successful, pass feedback to feedback.render_feedback
-    vim.schedule(function()
-      feedback.render_feedback(bufnr, decoded)
     end)
   end)
 end
