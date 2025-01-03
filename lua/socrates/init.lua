@@ -100,6 +100,7 @@ Return your response in JSON matching this schema (no extra keys, no additional 
     local data = json.decode(response.body)
     if data and data.choices and data.choices[1] and data.choices[1].message then
       local raw_content = data.choices[1].message.content
+      vim.notify("Received response from GPT: " .. raw_content)
 
       -- Attempt to parse GPT's JSON response
       local ok, comment_table = pcall(json.decode, raw_content)
