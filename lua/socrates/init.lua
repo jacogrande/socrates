@@ -96,7 +96,7 @@ end
 ---@param bufnr number
 ---@param feedback_list table list of feedback JSON objects
 local function render_feedback(bufnr, feedback_list)
-  local ns = vim.api.nvim_create_namespace("my_second_person_ns")
+  local ns = vim.api.nvim_create_namespace("socrates_ns")
 
   -- Clear existing marks for this buffer
   vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
@@ -140,7 +140,7 @@ local function handle_lines_changed(bufnr, changed_tick, start_line, old_lines_c
   local state = feedback_state[bufnr]
   if not state then return end
 
-  local ns = vim.api.nvim_create_namespace("my_second_person_ns")
+  local ns = vim.api.nvim_create_namespace("socrates_ns")
 
   for comment_id, fb in pairs(state) do
     local fb_start = fb.lineRange[1]
@@ -176,7 +176,7 @@ local function send_buffer_to_llm(bufnr)
   send_request(M.config.llm_api_url, payload, M.config.api_headers, function(err, res)
     if err then
       vim.schedule(function()
-        vim.notify("[my-second-person] LLM request error: " .. err, vim.log.levels.ERROR)
+        vim.notify("[socrates] LLM request error: " .. err, vim.log.levels.ERROR)
       end)
       return
     end
@@ -191,7 +191,7 @@ local function send_buffer_to_llm(bufnr)
       end)
     else
       vim.schedule(function()
-        vim.notify("[my-second-person] Failed to parse LLM response as JSON.", vim.log.levels.WARN)
+        vim.notify("[socrates] Failed to parse LLM response as JSON.", vim.log.levels.WARN)
       end)
     end
   end)
