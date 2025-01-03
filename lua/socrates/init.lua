@@ -14,7 +14,7 @@ local debounce_timer = nil
 -- Default config
 local default_config = {
   openai_api_key = os.getenv("OPENAI_API_KEY"),
-  model = "gpt-3.5-turbo",
+  model = "gpt-4o-mini",
   events = { "TextChangedI", "TextChanged" },
   debounce_ms = 2000, -- 2 seconds by default
 }
@@ -54,7 +54,6 @@ end
 --    We return a table of { line_number = ..., comment = ... }
 --------------------------------------------------------------------------------
 local function request_socratic_dialog(full_text_lines, changed_lines, config)
-  vim.notify("Requesting Socratic dialog...")
   -- Annotate lines so GPT knows how to reference them
   local annotated_text = annotate_lines(full_text_lines)
   local changed_lines_str = table.concat(changed_lines, ", ")
@@ -66,7 +65,7 @@ Here is the entire text (line numbers in parentheses for your reference):
 
 %s
 
-Only lines %s were changed from the previous version. Provide Socratic commentary (questions, counterpoints, suggestions) on these changed lines only.
+Only lines %s were changed from the previous version. Carefully read through the changed text, and ponder any serious criticisms, counterpoints, or questions. Act as if you're listening to an argument, so you should only interject when something sticks out as a bad argument or premise. It's okay if you have nothing to point out. Air on the side of staying quiet.
 
 Return your response in JSON matching this schema (no extra keys, no additional commentary outside JSON):
 {
@@ -97,12 +96,10 @@ Return your response in JSON matching this schema (no extra keys, no additional 
       temperature = 0.7,
     }),
   })
-  vim.notify("Received response from GPT: " .. response.status)
   if response and response.status == 200 then
     local data = json.decode(response.body)
     if data and data.choices and data.choices[1] and data.choices[1].message then
       local raw_content = data.choices[1].message.content
-      vim.notify("Received response from GPT: " .. raw_content)
 
       -- Attempt to parse GPT's JSON response
       local ok, comment_table = pcall(json.decode, raw_content)
@@ -221,11 +218,9 @@ end
 -- 5) Setup function for the plugin
 --------------------------------------------------------------------------------
 function M.setup(user_config)
-  vim.notify("Setting up Socrates with config: " .. vim.inspect(user_config))
   local config = vim.tbl_deep_extend("force", default_config, user_config or {})
 
   if not config.openai_api_key or config.openai_api_key == "" then
-    vim.notify("Socrates plugin: Missing OpenAI API key!", vim.log.levels.ERROR)
     return
   end
 
