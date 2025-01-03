@@ -1,154 +1,233 @@
--- Purpose: The main plugin file that:
---  1. Exposes the public setup() function for plugin configuration
---  2. Sets up autocmds for markdown, attaches watchers, debounces LLM calls
---  3. Calls out to 'api.lua' to get LLM feedback, and 'feedback.lua' to render it.
-
 local M = {}
 
-local api = require("socrates.api")
-local feedback = require("socrates.feedback")
+local curl = require('plenary.curl')
+local json = vim.json or require('dkjson')
 
---------------------------------------------------------------------------------
--- CONFIG
---------------------------------------------------------------------------------
+local socrates_ns = vim.api.nvim_create_namespace("Socrates")
 
-M.config = {
-  -- The user must provide an OpenAI API key via plugin setup in lazy or their config:
-  openai_api_key = "",
-  temperature = 0.7,  -- used when calling GPT
+-- Store the last buffer text so we can diff
+local last_sent_text = nil
 
-  -- How often (in ms) to debounce requests. When user types, we wait a bit before
-  -- sending an update to avoid spamming the API. Tweak as desired.
-  debounce_ms = 1000,
+-- For debouncing
+local debounce_timer = nil
+
+-- Default config
+local default_config = {
+  openai_api_key = os.getenv("OPENAI_API_KEY"),
+  model = "gpt-3.5-turbo",
+  events = { "TextChangedI", "TextChanged" },
+  debounce_ms = 2000, -- 2 seconds by default
 }
 
 --------------------------------------------------------------------------------
--- DEBOUNCING + STATE
+-- Utility: find which lines changed between old_lines and new_lines
 --------------------------------------------------------------------------------
+local function find_changed_lines(old_lines, new_lines)
+  local changed = {}
+  local max_len = math.max(#old_lines, #new_lines)
 
--- Track pending timers to avoid repeated calls
-local debounce_timers = {}
+  for i = 1, max_len do
+    local old_line = old_lines[i] or ""
+    local new_line = new_lines[i] or ""
+    if old_line ~= new_line then
+      table.insert(changed, i)
+    end
+  end
 
----Send the entire buffer to OpenAI, parse JSON feedback, and render in the buffer.
----@param bufnr number
-local function send_buffer_to_llm(bufnr)
-  -- Defer reading the buffer lines until we're in a safe context.
-  vim.schedule(function()
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local text = table.concat(lines, "\n")
+  return changed
+end
 
-    -- Use the API to send the text
-    api.send_to_openai(text, M.config, function(err, raw_content)
-      if err then
-        vim.schedule(function()
-          vim.notify("[socrates] LLM request error: " .. err, vim.log.levels.ERROR)
-        end)
-        return
+--------------------------------------------------------------------------------
+-- Utility: create a line-number annotated string
+-- e.g., (1) First line\n(2) Second line\n...
+--------------------------------------------------------------------------------
+local function annotate_lines(lines)
+  local annotated = {}
+  for i, line in ipairs(lines) do
+    table.insert(annotated, string.format("(%d) %s", i, line))
+  end
+  return table.concat(annotated, "\n")
+end
+
+--------------------------------------------------------------------------------
+-- 1) Helper to request Socratic dialog from OpenAI
+--    We return a table of { line_number = ..., comment = ... }
+--------------------------------------------------------------------------------
+local function request_socratic_dialog(full_text_lines, changed_lines, config)
+  -- Annotate lines so GPT knows how to reference them
+  local annotated_text = annotate_lines(full_text_lines)
+  local changed_lines_str = table.concat(changed_lines, ", ")
+
+  -- The user message
+  local user_prompt = string.format([[
+You are a Socratic teacher. 
+Here is the entire text (line numbers in parentheses for your reference):
+
+%s
+
+Only lines %s were changed from the previous version. Provide Socratic commentary (questions, counterpoints, suggestions) on these changed lines only.
+
+Return your response in JSON matching this schema (no extra keys, no additional commentary outside JSON):
+{
+  "comments": [
+    {
+      "line_number": number,
+      "comment": string
+    }
+  ]
+}
+  ]],
+    annotated_text,
+    changed_lines_str
+  )
+
+  -- Perform the HTTP request
+  local response = curl.post("https://api.openai.com/v1/chat/completions", {
+    headers = {
+      ["Content-Type"] = "application/json",
+      ["Authorization"] = "Bearer " .. config.openai_api_key,
+    },
+    body = json.encode({
+      model = config.model,
+      messages = {
+        { role = "user", content = user_prompt }
+      },
+      max_tokens = 512,
+      temperature = 0.7,
+    }),
+  })
+
+  if response and response.status == 200 then
+    local data = json.decode(response.body)
+    if data and data.choices and data.choices[1] and data.choices[1].message then
+      local raw_content = data.choices[1].message.content
+
+      -- Attempt to parse GPT's JSON response
+      local ok, comment_table = pcall(json.decode, raw_content)
+      if ok and comment_table and comment_table.comments then
+        return comment_table.comments
+      else
+        -- GPT might not always comply with the strict JSON format,
+        -- so handle fallback or error as you see fit
+        return {}
+      end
+    end
+  end
+
+  return {}
+end
+
+--------------------------------------------------------------------------------
+-- 2) Set diagnostics for each comment object { line_number, comment }
+--------------------------------------------------------------------------------
+local function set_socratic_diagnostics(bufnr, comments)
+  -- Clear existing "Socrates" diagnostics
+  vim.diagnostic.reset(socrates_ns, bufnr)
+
+  local diagnostics = {}
+
+  for _, c in ipairs(comments) do
+    local lnum = math.max(0, c.line_number - 1) -- 0-based
+    table.insert(diagnostics, {
+      lnum = lnum,
+      col = 0,
+      end_lnum = lnum,
+      end_col = 0,
+      severity = vim.diagnostic.severity.INFO,
+      message = c.comment,
+      source = "Socrates",
+    })
+  end
+
+  vim.diagnostic.set(socrates_ns, bufnr, diagnostics)
+end
+
+--------------------------------------------------------------------------------
+-- 3) Debounce helper
+--------------------------------------------------------------------------------
+local function schedule_socratic_request(callback, delay)
+  if debounce_timer then
+    debounce_timer:stop()
+    debounce_timer:close()
+    debounce_timer = nil
+  end
+
+  debounce_timer = vim.loop.new_timer()
+  debounce_timer:start(
+    delay,
+    0,
+    vim.schedule_wrap(function()
+      if debounce_timer then
+        debounce_timer:stop()
+        debounce_timer:close()
+        debounce_timer = nil
       end
 
-      -- Our plugin expects the content to be valid JSON array of feedback objects
-      local ok, decoded = pcall(vim.json.decode, raw_content)
-      if not ok or type(decoded) ~= "table" then
-        vim.schedule(function()
-          vim.notify("[socrates] Failed to parse LLM response as JSON array.", vim.log.levels.WARN)
-        end)
-        return
-      end
-
-      -- If decoding was successful, pass feedback to feedback.render_feedback
-      vim.schedule(function()
-        feedback.render_feedback(bufnr, decoded)
-      end)
+      callback()
     end)
-  end)
-end
-
----Debounce requests so we don’t spam the LLM each time the user types.
----@param bufnr number
-local function schedule_llm_request(bufnr)
-  if debounce_timers[bufnr] then
-    debounce_timers[bufnr]:stop()
-    debounce_timers[bufnr] = nil
-  end
-
-  local timer = vim.loop.new_timer()
-  timer:start(M.config.debounce_ms, 0, function()
-    timer:stop()
-    timer:close()
-    debounce_timers[bufnr] = nil
-    send_buffer_to_llm(bufnr)
-  end)
-  debounce_timers[bufnr] = timer
+  )
 end
 
 --------------------------------------------------------------------------------
--- BUFFER ATTACH
+-- 4) Autocommands to trigger the request
 --------------------------------------------------------------------------------
+local function setup_autocmds(config)
+  vim.api.nvim_create_autocmd(config.events, {
+    pattern = "*.md",
+    callback = function()
+      local bufnr = vim.api.nvim_get_current_buf()
+      local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+      local text = table.concat(lines, "\n")
 
----Attach to a buffer for markdown
----@param bufnr number
-local function attach_to_markdown_buffer(bufnr)
-  vim.api.nvim_buf_attach(bufnr, false, {
-    on_lines = function(_, _bufnr, changed_tick, start_line, old_lines_count, new_lines_count, byte_count)
-      -- Remove overlapping feedback
-      feedback.handle_lines_changed(_bufnr, changed_tick, start_line, old_lines_count, new_lines_count)
-      -- Schedule a new LLM request
-      schedule_llm_request(_bufnr)
-      return false
-    end,
-    on_detach = function()
-      -- Cleanup
-      feedback.clear_feedback(bufnr)
-      if debounce_timers[bufnr] then
-        debounce_timers[bufnr]:stop()
-        debounce_timers[bufnr] = nil
+      -- If there's hardly any text, skip
+      if #text < 10 then
+        vim.diagnostic.reset(socrates_ns, bufnr)
+        return
       end
+
+      -- Debounced callback
+      schedule_socratic_request(function()
+        -- Determine changed lines vs. last_sent_text
+        local old_lines = {}
+        if last_sent_text ~= nil then
+          old_lines = vim.split(last_sent_text, "\n")
+        end
+
+        local changed_lines = find_changed_lines(old_lines, lines)
+        if #changed_lines == 0 then
+          -- no changes, no need to request
+          return
+        end
+
+        -- Call GPT
+        local comments = request_socratic_dialog(lines, changed_lines, config)
+        if comments and #comments > 0 then
+          set_socratic_diagnostics(bufnr, comments)
+        else
+          -- If GPT returned nothing or an error, clear or handle differently
+          vim.diagnostic.reset(socrates_ns, bufnr)
+        end
+
+        -- Update last_sent_text
+        last_sent_text = text
+      end, config.debounce_ms)
     end,
   })
 end
 
 --------------------------------------------------------------------------------
--- SIDE PANE
+-- 5) Setup function for the plugin
 --------------------------------------------------------------------------------
+function M.setup(user_config)
+  local config = vim.tbl_deep_extend("force", default_config, user_config or {})
 
----Optional side pane for logs or additional info.
-function M.open_side_pane()
-  vim.cmd("vsplit | enew")
-  vim.cmd("setlocal buftype=nofile bufhidden=wipe nobuflisted")
-  vim.cmd("file GPT_Feedback")
-  vim.api.nvim_buf_set_lines(0, 0, -1, false, {
-    "Feedback appears inline (virtual text) in the main buffer.",
-    "This pane can be used for additional logs or notes.",
-  })
-end
-
---------------------------------------------------------------------------------
--- PUBLIC API
---------------------------------------------------------------------------------
-
----Plugin setup. Users can configure it in their lazy.nvim config, e.g.:
----  require("socrates").setup({
----    openai_api_key = "...",
----    debounce_ms = 1500,
----    temperature = 0.7,
----  })
-function M.setup(opts)
-  if opts then
-    M.config = vim.tbl_deep_extend("force", M.config, opts)
+  if not config.openai_api_key or config.openai_api_key == "" then
+    vim.notify("Socrates plugin: Missing OpenAI API key!", vim.log.levels.ERROR)
+    return
   end
 
-  -- Create a user command to open side pane
-  vim.api.nvim_create_user_command("MarkdownFeedbackOpen", function()
-    M.open_side_pane()
-  end, {})
-
-  -- Autocmd: attach only for markdown files
-  vim.api.nvim_create_autocmd("FileType", {
-    pattern = { "markdown" },
-    callback = function(args)
-      attach_to_markdown_buffer(args.buf)
-    end,
-  })
+  setup_autocmds(config)
 end
 
 return M
+
