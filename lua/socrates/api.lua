@@ -22,7 +22,7 @@ function M.send_to_openai(text, config, callback)
 
   -- Build the JSON payload for the chat/completions endpoint
   local payload = {
-    model = "gpt-4o", -- or "gpt-4", whichever your account supports
+    model = "gpt-4o-mini",
     messages = {
       { role = "user", content = text },
     },
