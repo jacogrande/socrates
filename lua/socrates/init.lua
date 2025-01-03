@@ -2,6 +2,11 @@ local M = {}
 
 local curl = require('plenary.curl')
 local json = vim.json or require('dkjson')
+local log = require('plenary.log').new({
+  plugin = 'socrates',
+  level = 'debug',
+  use_console = false,
+})
 
 local socrates_ns = vim.api.nvim_create_namespace("Socrates")
 
@@ -54,6 +59,8 @@ end
 --    We return a table of { line_number = ..., comment = ... }
 --------------------------------------------------------------------------------
 local function request_socratic_dialog(full_text_lines, changed_lines, config)
+  log.debug("Requesting Socratic dialog...")
+  log.debug("Sending text to GPT: " .. full_text_lines)
   -- Annotate lines so GPT knows how to reference them
   local annotated_text = annotate_lines(full_text_lines)
   local changed_lines_str = table.concat(changed_lines, ", ")
@@ -96,11 +103,12 @@ Return your response in JSON matching this schema (no extra keys, no additional 
       temperature = 0.7,
     }),
   })
-
+  log.info("Setting up Socrates with config: " .. vim.inspect(config))
   if response and response.status == 200 then
     local data = json.decode(response.body)
     if data and data.choices and data.choices[1] and data.choices[1].message then
       local raw_content = data.choices[1].message.content
+      log.debug("Received response from GPT: " .. raw_content)
 
       -- Attempt to parse GPT's JSON response
       local ok, comment_table = pcall(json.decode, raw_content)
@@ -219,6 +227,7 @@ end
 -- 5) Setup function for the plugin
 --------------------------------------------------------------------------------
 function M.setup(user_config)
+  log.info("Setting up Socrates with config: " .. vim.inspect(user_config))
   local config = vim.tbl_deep_extend("force", default_config, user_config or {})
 
   if not config.openai_api_key or config.openai_api_key == "" then
