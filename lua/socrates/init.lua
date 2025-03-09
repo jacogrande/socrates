@@ -2,6 +2,7 @@ local M = {}
 
 local curl = require('plenary.curl')
 local json = vim.json or require('dkjson')
+math.randomseed(os.time()) -- Initialize random seed
 
 local socrates_ns = vim.api.nvim_create_namespace("Socrates")
 
@@ -16,7 +17,8 @@ local default_config = {
   openai_api_key = os.getenv("OPENAI_API_KEY"),
   model = "gpt-4o-mini",
   events = { "TextChangedI", "TextChanged" },
-  debounce_ms = 2000, -- 2 seconds by default
+  debounce_ms = 5000, -- 5 seconds by default
+  response_threshold = 0.8 -- Higher threshold means fewer responses
 }
 
 --------------------------------------------------------------------------------
@@ -59,12 +61,20 @@ local function request_socratic_dialog_async(full_text_lines, changed_lines, con
   local changed_lines_str = table.concat(changed_lines, ", ")
 
   local user_prompt = string.format([[
-You are a Socratic teacher. 
+You are a Socratic teacher who is extremely selective about when to respond. 
 Here is the entire text (line numbers in parentheses for your reference):
 
 %s
 
-Only lines %s were changed from the previous version. Carefully read through the changed text, and ponder any serious criticisms, counterpoints, or questions. Act as if you're listening to an argument, so you should only interject when something sticks out as a bad argument or premise. It's okay if you have nothing to point out. Air on the side of staying quiet.
+Only lines %s were changed from the previous version. Your task is to steelman opposing arguments, but ONLY when the writer makes a point that has a genuinely strong counterargument.
+
+CRITICAL INSTRUCTIONS:
+1. Be EXTREMELY selective - remain silent most of the time (>80%% of updates should have no response)
+2. Only respond when there is a truly compelling opposing viewpoint worth considering
+3. Focus on steelmanning the strongest possible counterargument to the writer's position
+4. Prioritize philosophical and logical counterpoints over factual corrections
+5. Never respond to neutral statements, questions, or exploratory thinking
+6. DEFAULT TO SILENCE unless the argument clearly warrants a strong counterpoint
 
 Return your response in JSON matching this schema (no extra keys, no additional commentary outside JSON):
 {
@@ -86,7 +96,7 @@ Return your response in JSON matching this schema (no extra keys, no additional 
       { role = "user", content = user_prompt }
     },
     max_tokens = 512,
-    temperature = 0.7,
+    temperature = 1.0, -- Higher temperature increases randomness, making model more likely to remain silent
   })
 
   -- Make an *asynchronous* request with `callback`:
@@ -198,6 +208,17 @@ local function setup_autocmds(config)
           return
         end
 
+        -- For large changes, we're less likely to respond
+        local change_ratio = math.min(1.0, #changed_lines / #lines)
+        
+        -- Only proceed with the request if we pass a random threshold check
+        -- This ensures we respond much less frequently
+        if math.random() > (config.response_threshold + change_ratio) then
+          -- Skip this update but still store the text
+          last_sent_text = text
+          return
+        end
+        
         request_socratic_dialog_async(lines, changed_lines, config, function(comments)
           if comments and #comments > 0 then
             set_socratic_diagnostics(bufnr, comments)
