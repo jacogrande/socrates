@@ -6,6 +6,22 @@ math.randomseed(os.time()) -- Initialize random seed
 
 local socrates_ns = vim.api.nvim_create_namespace("Socrates")
 
+-- Simple logger function to replace vim.notify
+local function log(message, level)
+  local config = M.config
+  if not config or not config.log_file then
+    return
+  end
+  
+  local file = io.open(config.log_file, "a")
+  if file then
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local log_level = level or "INFO"
+    file:write(string.format("[%s] [%s] %s\n", timestamp, log_level, message))
+    file:close()
+  end
+end
+
 -- Store the last buffer text so we can diff
 local last_sent_text = nil
 
@@ -18,7 +34,8 @@ local default_config = {
   model = "gpt-4o-mini",
   events = { "TextChangedI", "TextChanged" },
   debounce_ms = 5000, -- 5 seconds by default
-  response_threshold = 0.8 -- Higher threshold means fewer responses
+  response_threshold = 0.8, -- Higher threshold means fewer responses
+  log_file = nil -- Set to a file path to enable logging
 }
 
 --------------------------------------------------------------------------------
@@ -60,12 +77,7 @@ local function request_socratic_dialog_async(full_text_lines, changed_lines, con
   local annotated_text = annotate_lines(full_text_lines)
   local changed_lines_str = table.concat(changed_lines, ", ")
   
-  vim.schedule(function()
-    vim.notify(string.format(
-      "Socrates: Building API request for changed lines: %s", 
-      changed_lines_str
-    ), vim.log.levels.INFO)
-  end)
+  log(string.format("Building API request for changed lines: %s", changed_lines_str), "INFO")
 
   local user_prompt = string.format([[
 You are a Socratic teacher who is extremely selective about when to respond. 
@@ -73,15 +85,17 @@ Here is the entire text (line numbers in parentheses for your reference):
 
 %s
 
-Only lines %s were changed from the previous version. Your task is to steelman opposing arguments, but ONLY when the writer makes a point that has a genuinely strong counterargument.
+Only lines %s were changed from the previous version. Your task is to steelman opposing arguments, but ONLY when the writer makes a point about philosophy or politics that has a genuinely strong counterargument.
 
 CRITICAL INSTRUCTIONS:
-1. Be EXTREMELY selective - remain silent most of the time (>80%% of updates should have no response)
-2. Only respond when there is a truly compelling opposing viewpoint worth considering
-3. Focus on steelmanning the strongest possible counterargument to the writer's position
-4. Prioritize philosophical and logical counterpoints over factual corrections
-5. Never respond to neutral statements, questions, or exploratory thinking
-6. DEFAULT TO SILENCE unless the argument clearly warrants a strong counterpoint
+1. ONLY respond to philosophical or political writing
+2. NEVER respond to technical documentation, code explanations, scientific facts, or non-philosophical/non-political topics
+3. Be EXTREMELY selective - remain silent most of the time (>80%% of updates should have no response)
+4. Only respond when there is a truly compelling opposing viewpoint worth considering
+5. Focus on steelmanning the strongest possible counterargument to the writer's position
+6. Prioritize philosophical and logical counterpoints over factual corrections
+7. Never respond to neutral statements, questions, or exploratory thinking
+8. DEFAULT TO SILENCE unless the argument clearly warrants a strong counterpoint
 
 Return your response in JSON matching this schema (no extra keys, no additional commentary outside JSON):
 {
@@ -116,49 +130,30 @@ Return your response in JSON matching this schema (no extra keys, no additional 
     callback = function(response)  -- this runs *after* HTTP completes
       local comments = {}
       if response and response.status == 200 then
-        local notify_status = function()
-          vim.notify("Socrates: Received response with status 200", vim.log.levels.INFO)
-        end
-        vim.schedule(notify_status)
+        log("Received response with status 200", "INFO")
         
         local data = json.decode(response.body)
         if data and data.choices and data.choices[1] and data.choices[1].message then
           local raw_content = data.choices[1].message.content
           
-          vim.schedule(function()
-            vim.notify(string.format(
-              "Socrates: Raw API response: %s", 
-              string.sub(raw_content, 1, 100) .. (string.len(raw_content) > 100 and "..." or "")
-            ), vim.log.levels.INFO)
-          end)
+          log(string.format("Raw API response: %s", 
+            string.sub(raw_content, 1, 100) .. (string.len(raw_content) > 100 and "..." or "")), 
+            "INFO")
           
           -- Attempt to parse GPT's JSON response
           local ok, comment_table = pcall(json.decode, raw_content)
           if ok and comment_table and comment_table.comments then
             comments = comment_table.comments
-            vim.schedule(function()
-              vim.notify(string.format(
-                "Socrates: Successfully parsed %d comments from JSON response", 
-                #comments
-              ), vim.log.levels.INFO)
-            end)
+            log(string.format("Successfully parsed %d comments from JSON response", #comments), "INFO")
           else
-            vim.schedule(function()
-              vim.notify("Socrates: Failed to parse JSON response or no comments found", vim.log.levels.WARN)
-            end)
+            log("Failed to parse JSON response or no comments found", "WARN")
           end
         else
-          vim.schedule(function()
-            vim.notify("Socrates: Unexpected API response format", vim.log.levels.WARN)
-          end)
+          log("Unexpected API response format", "WARN")
         end
       else
-        vim.schedule(function()
-          vim.notify(string.format(
-            "Socrates: API request failed with status %s", 
-            response and response.status or "unknown"
-          ), vim.log.levels.ERROR)
-        end)
+        log(string.format("API request failed with status %s", 
+          response and response.status or "unknown"), "ERROR")
       end
 
       -- Ensure any UI updates or diagnostics happen on the main thread:
@@ -253,45 +248,32 @@ local function setup_autocmds(config)
         local change_ratio = math.min(1.0, #changed_lines / #lines)
         
         -- Log information for debugging
-        vim.schedule(function()
-          vim.notify(string.format(
-            "Socrates: Changed lines: %d, Total lines: %d, Change ratio: %.2f, Threshold: %.2f", 
-            #changed_lines, #lines, change_ratio, config.response_threshold + change_ratio
-          ), vim.log.levels.INFO)
-        end)
+        log(string.format(
+          "Changed lines: %d, Total lines: %d, Change ratio: %.2f, Threshold: %.2f", 
+          #changed_lines, #lines, change_ratio, config.response_threshold + change_ratio
+        ), "INFO")
         
         -- Only proceed with the request if we pass a random threshold check
         -- This ensures we respond much less frequently
         local random_value = math.random()
         if random_value > (config.response_threshold + change_ratio) then
           -- Skip this update but still store the text
-          vim.schedule(function()
-            vim.notify(string.format(
-              "Socrates: Skipping request (random value %.2f > threshold %.2f)", 
-              random_value, config.response_threshold + change_ratio
-            ), vim.log.levels.INFO)
-          end)
+          log(string.format(
+            "Skipping request (random value %.2f > threshold %.2f)", 
+            random_value, config.response_threshold + change_ratio
+          ), "INFO")
           last_sent_text = text
           return
         end
         
-        vim.schedule(function()
-          vim.notify("Socrates: Sending request to OpenAI", vim.log.levels.INFO)
-        end)
+        log("Sending request to OpenAI", "INFO")
         
         request_socratic_dialog_async(lines, changed_lines, config, function(comments)
           if comments and #comments > 0 then
-            vim.schedule(function()
-              vim.notify(string.format(
-                "Socrates: Received %d comments from OpenAI", 
-                #comments
-              ), vim.log.levels.INFO)
-            end)
+            log(string.format("Received %d comments from OpenAI", #comments), "INFO")
             set_socratic_diagnostics(bufnr, comments)
           else
-            vim.schedule(function()
-              vim.notify("Socrates: No comments received from OpenAI", vim.log.levels.INFO)
-            end)
+            log("No comments received from OpenAI", "INFO")
             vim.diagnostic.reset(socrates_ns, bufnr)
           end
 
@@ -307,13 +289,13 @@ end
 -- 5) Setup function for the plugin
 --------------------------------------------------------------------------------
 function M.setup(user_config)
-  local config = vim.tbl_deep_extend("force", default_config, user_config or {})
+  M.config = vim.tbl_deep_extend("force", default_config, user_config or {})
 
-  if not config.openai_api_key or config.openai_api_key == "" then
+  if not M.config.openai_api_key or M.config.openai_api_key == "" then
     return
   end
 
-  setup_autocmds(config)
+  setup_autocmds(M.config)
 end
 
 return M

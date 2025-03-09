@@ -9,8 +9,10 @@ Socrates is a Neovim plugin that uses the OpenAI API to provide Socratic dialog 
 ## Features
 
 - **Line-by-line Socratic comments** in the form of Neovim diagnostics.
+- **Focused on philosophical and political writing** - won't respond to technical documentation.
 - **Debouncing** to avoid spamming the API on every keystroke.
 - **Diff-based** commentary: only changed lines get annotated.
+- **Optional logging** to a file for debugging.
 - Works seamlessly with your existing `.md` files and note-taking workflow.
 
 ---
@@ -73,18 +75,22 @@ Below are the main config options you can override:
 | Field            | Type      | Default                             | Description                                                                                             |
 | ---------------- | --------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `openai_api_key` | `string`  | `os.getenv("OPENAI_API_KEY")`       | Your OpenAI API key. If left blank, the plugin will look for the `OPENAI_API_KEY` environment variable. |
-| `model`          | `string`  | `"gpt-3.5-turbo"`                   | Which OpenAI model to use for the chat completions.                                                     |
+| `model`          | `string`  | `"gpt-4o-mini"`                     | Which OpenAI model to use for the chat completions.                                                     |
 | `events`         | `table`   | `{ "TextChangedI", "TextChanged" }` | The auto commands that will trigger Socrates requests.                                                  |
-| `debounce_ms`    | `integer` | `2000`                              | How many milliseconds to wait before sending a new request to GPT, to avoid spamming the API.           |
+| `debounce_ms`    | `integer` | `5000`                              | How many milliseconds to wait before sending a new request to GPT, to avoid spamming the API.           |
+| `log_file`       | `string`  | `nil`                               | File path for logging. If not provided, logging is disabled.                                            |
+| `response_threshold` | `number` | `0.8`                            | Higher threshold means fewer responses (0.0-1.0).                                                       |
 
 Example config:
 
 ```lua
 require("socrates").setup({
   openai_api_key = "sk-your-api-key-here",
-  model = "gpt-3.5-turbo",
+  model = "gpt-4o-mini",
   events = { "TextChangedI", "TextChanged" },
-  debounce_ms = 2000,
+  debounce_ms = 5000,
+  log_file = "/path/to/socrates.log", -- optional
+  response_threshold = 0.8,
 })
 ```
 
