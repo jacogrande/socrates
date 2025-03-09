@@ -60,10 +60,12 @@ local function request_socratic_dialog_async(full_text_lines, changed_lines, con
   local annotated_text = annotate_lines(full_text_lines)
   local changed_lines_str = table.concat(changed_lines, ", ")
   
-  vim.notify(string.format(
-    "Socrates: Building API request for changed lines: %s", 
-    changed_lines_str
-  ), vim.log.levels.INFO)
+  vim.schedule(function()
+    vim.notify(string.format(
+      "Socrates: Building API request for changed lines: %s", 
+      changed_lines_str
+    ), vim.log.levels.INFO)
+  end)
 
   local user_prompt = string.format([[
 You are a Socratic teacher who is extremely selective about when to respond. 
@@ -114,34 +116,49 @@ Return your response in JSON matching this schema (no extra keys, no additional 
     callback = function(response)  -- this runs *after* HTTP completes
       local comments = {}
       if response and response.status == 200 then
-        vim.notify("Socrates: Received response with status 200", vim.log.levels.INFO)
+        local notify_status = function()
+          vim.notify("Socrates: Received response with status 200", vim.log.levels.INFO)
+        end
+        vim.schedule(notify_status)
+        
         local data = json.decode(response.body)
         if data and data.choices and data.choices[1] and data.choices[1].message then
           local raw_content = data.choices[1].message.content
-          vim.notify(string.format(
-            "Socrates: Raw API response: %s", 
-            string.sub(raw_content, 1, 100) .. (string.len(raw_content) > 100 and "..." or "")
-          ), vim.log.levels.INFO)
+          
+          vim.schedule(function()
+            vim.notify(string.format(
+              "Socrates: Raw API response: %s", 
+              string.sub(raw_content, 1, 100) .. (string.len(raw_content) > 100 and "..." or "")
+            ), vim.log.levels.INFO)
+          end)
           
           -- Attempt to parse GPT's JSON response
           local ok, comment_table = pcall(json.decode, raw_content)
           if ok and comment_table and comment_table.comments then
             comments = comment_table.comments
-            vim.notify(string.format(
-              "Socrates: Successfully parsed %d comments from JSON response", 
-              #comments
-            ), vim.log.levels.INFO)
+            vim.schedule(function()
+              vim.notify(string.format(
+                "Socrates: Successfully parsed %d comments from JSON response", 
+                #comments
+              ), vim.log.levels.INFO)
+            end)
           else
-            vim.notify("Socrates: Failed to parse JSON response or no comments found", vim.log.levels.WARN)
+            vim.schedule(function()
+              vim.notify("Socrates: Failed to parse JSON response or no comments found", vim.log.levels.WARN)
+            end)
           end
         else
-          vim.notify("Socrates: Unexpected API response format", vim.log.levels.WARN)
+          vim.schedule(function()
+            vim.notify("Socrates: Unexpected API response format", vim.log.levels.WARN)
+          end)
         end
       else
-        vim.notify(string.format(
-          "Socrates: API request failed with status %s", 
-          response and response.status or "unknown"
-        ), vim.log.levels.ERROR)
+        vim.schedule(function()
+          vim.notify(string.format(
+            "Socrates: API request failed with status %s", 
+            response and response.status or "unknown"
+          ), vim.log.levels.ERROR)
+        end)
       end
 
       -- Ensure any UI updates or diagnostics happen on the main thread:
@@ -236,35 +253,45 @@ local function setup_autocmds(config)
         local change_ratio = math.min(1.0, #changed_lines / #lines)
         
         -- Log information for debugging
-        vim.notify(string.format(
-          "Socrates: Changed lines: %d, Total lines: %d, Change ratio: %.2f, Threshold: %.2f", 
-          #changed_lines, #lines, change_ratio, config.response_threshold + change_ratio
-        ), vim.log.levels.INFO)
+        vim.schedule(function()
+          vim.notify(string.format(
+            "Socrates: Changed lines: %d, Total lines: %d, Change ratio: %.2f, Threshold: %.2f", 
+            #changed_lines, #lines, change_ratio, config.response_threshold + change_ratio
+          ), vim.log.levels.INFO)
+        end)
         
         -- Only proceed with the request if we pass a random threshold check
         -- This ensures we respond much less frequently
         local random_value = math.random()
         if random_value > (config.response_threshold + change_ratio) then
           -- Skip this update but still store the text
-          vim.notify(string.format(
-            "Socrates: Skipping request (random value %.2f > threshold %.2f)", 
-            random_value, config.response_threshold + change_ratio
-          ), vim.log.levels.INFO)
+          vim.schedule(function()
+            vim.notify(string.format(
+              "Socrates: Skipping request (random value %.2f > threshold %.2f)", 
+              random_value, config.response_threshold + change_ratio
+            ), vim.log.levels.INFO)
+          end)
           last_sent_text = text
           return
         end
         
-        vim.notify("Socrates: Sending request to OpenAI", vim.log.levels.INFO)
+        vim.schedule(function()
+          vim.notify("Socrates: Sending request to OpenAI", vim.log.levels.INFO)
+        end)
         
         request_socratic_dialog_async(lines, changed_lines, config, function(comments)
           if comments and #comments > 0 then
-            vim.notify(string.format(
-              "Socrates: Received %d comments from OpenAI", 
-              #comments
-            ), vim.log.levels.INFO)
+            vim.schedule(function()
+              vim.notify(string.format(
+                "Socrates: Received %d comments from OpenAI", 
+                #comments
+              ), vim.log.levels.INFO)
+            end)
             set_socratic_diagnostics(bufnr, comments)
           else
-            vim.notify("Socrates: No comments received from OpenAI", vim.log.levels.INFO)
+            vim.schedule(function()
+              vim.notify("Socrates: No comments received from OpenAI", vim.log.levels.INFO)
+            end)
             vim.diagnostic.reset(socrates_ns, bufnr)
           end
 
